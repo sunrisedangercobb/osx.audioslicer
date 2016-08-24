@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# Change independent field seperator
+SAVEIFS=$IFS
+IFS=$'\n'
+
+APP_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
+APP_NAME="$(basename "$0")"
+BASE_APP_PATH=`echo $APP_PATH | sed -e 's/Contents\/MacOS//g'`
+
+# Check for preferred notifier.
+check_gem=`gem list terminal-notifier -i`
+
+## Create functions for repetitious work
+# Notification functions
+function success_completion () {
+  if [[ $check_gem == "true" ]]; then
+    echo "Completed all files" | terminal-notifier -title $APP_NAME -sound default -contentImage "$BASE_APP_PATH/Contents/Resources/$APP_NAME.icns"
+  else
+    osascript -e "display notification \"Completed all files\" with title \"$APP_NAME\""
+  fi
+}
+function success () {
+  if [[ $check_gem == "true" ]]; then
+    echo "Converted: $@" | terminal-notifier -title $APP_NAME -contentImage "$BASE_APP_PATH/Contents/Resources/$APP_NAME.icns"
+  else
+    osascript -e "display notification \"Converted: $@\" with title \"$APP_NAME\""
+  fi
+}
+function killed () {
+  if [[ $check_gem == "true" ]]; then
+    echo "$APP_NAME Killed" | terminal-notifier -title $APP_NAME -sound Basso -contentImage "$BASE_APP_PATH/Contents/Resources/$APP_NAME.icns"
+  else
+    osascript -e "display notification \"$APP_NAME Killed\" with title \"$APP_NAME\""
+  fi
+}
+function failure () {
+  if [[ $check_gem == "true" ]]; then
+    echo "Failed: $@" | terminal-notifier -title $APP_NAME -sound Basso -contentImage "$BASE_APP_PATH/Contents/Resources/$APP_NAME.icns"
+  else
+    osascript -e "display notification \"Failed: $@\" with title \"$APP_NAME\""
+  fi
+}
+function error {
+  if [[ $check_gem == "true" ]]; then
+    echo "Exiting: Error" | terminal-notifier -title $APP_NAME -sound Basso -contentImage "$BASE_APP_PATH/Contents/Resources/$APP_NAME.icns"
+  else
+    osascript -e "display notification \"Exiting: Error\" with title \"$APP_NAME\""
+  fi
+}
+# Misc work and Errors
+function cut_string () {
+  echo $@ | cut -d ":" -f 2
+}
+function check_removal () {
+  if [[ $? == 1 ]]; then
+    IFS=$SAVEIFS
+    exit 1
+  fi
+}
+function check_bool () {
+  if [[ $? == 1 ]]; then
+    IFS=$SAVEIFS
+    error
+    exit 1
+  fi
+}
+function kill_app () {
+  pids=`ps -ef | grep $APP_NAME | grep "/bin/bash" | awk '{print $2}'`
+  for pid in $pids; do
+    kill $pid
+    killed
+    IFS=$SAVEIFS
+    exit 0
+  done
+}
+
+# Prompt for file/folder input
+input_selector=`osascript -e 'tell app "System Events" to display dialog "Select a File or Folder?" buttons {"Cancel","Folder","File"} default button 3 with title "'$APP_NAME'" with icon {"'$BASE_APP_PATH'/Contents/Resources/'$APP_NAME'.icns"}'` 
+check_bool $input_selector
+input_selection=`cut_string $input_selector`
+
+# Do a check for input selection file/folder and create array
+if [[ $input_selection == "File" ]]; then
+  files=`osascript -e 'tell application "System Events" to return POSIX path of (choose file)'`
+  check_bool $files
+  file_list=`find "$files"`
+  input_directory=`dirname "$files"`
+else
+  files=`osascript -e 'tell application "System Events" to return POSIX path of (choose folder)'`
+  check_bool $files
+  file_list=`find "$files" -iname "*.m4v" -o -iname "*.mp4" -o -iname "*.mkv"`
+  input_directory="$files"  
+fi
+
+# Prompt for folder output
+output_selector=`osascript -e 'tell app "System Events" to display dialog "Select Output Directory. (Default:Input)" buttons {"Cancel","Select","Default"} default button 3 with title "'$APP_NAME'" with icon {"'$BASE_APP_PATH'/Contents/Resources/'$APP_NAME'.icns"}'`
+check_bool $output_selector
+output_selection=`cut_string $output_selector`
+
+# Do a check for output selection default/other
+if [[ $output_selection != "Default" ]]; then 
+  output_directory=`osascript -e 'tell application "System Events" to return POSIX path of (choose folder)'`
+  check_bool $output_directory
+fi
+
+# Do the work
+for file in $file_list; do
+  if [[ $output_selection == "Default" ]]; then
+    output_directory=`dirname $file`
+  fi  
+  base_filename=`basename $file`
+  extension=`echo $base_filename | rev | cut -d "." -f 1 | rev`
+  $BASE_APP_PATH/Contents/Resources/bin/ffmpeg -i "$file" -c:a aac -strict experimental -b:a 192k -c:v copy $output_directory/"${base_filename%.${extension}}.acc.${extension}"
+  check_bool
+  success "${base_filename%.${extension}}.acc.${extension}"  
+done
+
+success_completion
+
+# Prompt for removal of original .cbr files
+remove_file=`osascript -e 'tell app "System Events" to display dialog "Remove old files?" default button 2 with title "'$APP_NAME'" with icon {"'$BASE_APP_PATH'/Contents/Resources/'$APP_NAME'.icns"}'`
+check_removal $remove_file
+
+for file in $file_list; do
+  rm "$file"
+done
+
+IFS=$SAVEIFS
+exit 0
